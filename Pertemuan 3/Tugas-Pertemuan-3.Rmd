@@ -1,0 +1,270 @@
+---
+title: "Tugas Pertemuan 3 - Regresi dengan Peubah Lag"
+author: ""
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: readable
+    df_print: paged
+---
+
+# 1. Persiapan Library
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(lmtest)
+library(car)
+library(rio)
+```
+
+# 2. Impor dan Persiapan Data
+
+```{r data}
+data <- rio::import("NewDelhi_Air_quality.csv")
+
+# Memilih variabel
+data <- data[, c("AQI", "pm25")]
+
+# Hapus missing value
+data <- na.omit(data)
+
+# Memastikan tipe data numerik
+data$AQI <- as.numeric(data$AQI)
+data$pm25 <- as.numeric(data$pm25)
+
+str(data)
+summary(data)
+head(data)
+```
+
+```{r split}
+n <- nrow(data)
+n_train <- floor(0.80 * n)
+
+train <- data[1:n_train, ]
+test <- data[(n_train + 1):n, ]
+
+train.ts <- ts(train)
+test.ts <- ts(test)
+data.ts <- ts(data)
+
+nrow(train)
+nrow(test)
+```
+
+# 3. Model Koyck
+
+
+```{r koyck}
+model.koyck <- koyckDlm(
+  x = train$pm25,
+  y = train$AQI
+)
+
+summary(model.koyck)
+```
+
+## Peramalan Koyck
+
+```{r koyck-forecast}
+h <- nrow(test)
+
+fore.koyck <- forecast(
+  model = model.koyck,
+  x = test$pm25,
+  h = h
+)
+
+fore.koyck
+
+mape.koyck <- MAPE(fore.koyck$forecasts, test$AQI)
+deviance.koyck <- sum(residuals(model.koyck)^2)
+
+cat("MAPE Koyck:", mape.koyck, "\n")
+cat("Deviance Koyck:", deviance.koyck, "\n")
+```
+
+# 4. Distributed Lag Model (DLM)
+
+```{r dlm-search}
+dlm.opt <- finiteDLMauto(
+  formula = AQI ~ pm25,
+  data = train,
+  q.min = 1,
+  q.max = 10,
+  model.type = "dlm",
+  error.type = "AIC",
+  trace = TRUE
+)
+
+dlm.opt
+```
+
+AIC terkecil diperoleh pada **q = 10**.
+
+```{r dlm-final}
+q.dlm.opt <- 10
+
+model.dlm.opt <- dlm(
+  x = train$pm25,
+  y = train$AQI,
+  q = q.dlm.opt
+)
+
+summary(model.dlm.opt)
+```
+
+## Peramalan DLM
+
+```{r dlm-forecast}
+fore.dlm <- forecast(
+  model = model.dlm.opt,
+  x = test$pm25,
+  h = h
+)
+
+fore.dlm
+
+mape.dlm <- MAPE(fore.dlm$forecasts, test$AQI)
+deviance.dlm <- sum(residuals(model.dlm.opt)^2)
+
+cat("MAPE DLM:", mape.dlm, "\n")
+cat("Deviance DLM:", deviance.dlm, "\n")
+```
+
+# 5. Autoregressive Distributed Lag (ARDL)
+
+```{r ardl-search}
+model.ardl.opt <- ardlBoundOrders(
+  data = data.frame(train),
+  ic = "AIC",
+  formula = AQI ~ pm25
+)
+
+model.ardl.opt
+```
+
+Pada pencarian lag 1 sampai 15 untuk masing-masing komponen, kombinasi AIC terkecil pada data ini adalah **lag X (p) = 14** dan **lag Y (q) = 15**.
+
+```{r ardl-final}
+p.ardl.opt <- 14
+q.ardl.opt <- 15
+
+model.ardl <- ardlDlm(
+  formula = AQI ~ pm25,
+  data = train,
+  p = p.ardl.opt,
+  q = q.ardl.opt
+)
+
+summary(model.ardl)
+```
+
+## Peramalan ARDL
+
+```{r ardl-forecast}
+fore.ardl <- forecast(
+  model = model.ardl,
+  x = test$pm25,
+  h = h
+)
+
+fore.ardl
+
+mape.ardl <- MAPE(fore.ardl$forecasts, test$AQI)
+deviance.ardl <- sum(residuals(model.ardl)^2)
+
+cat("MAPE ARDL:", mape.ardl, "\n")
+cat("Deviance ARDL:", deviance.ardl, "\n")
+```
+
+# 6. Uji Asumsi
+
+```{r assumptions}
+cons_lm1 <- dynlm(
+  AQI ~ pm25 + L(pm25),
+  data = train.ts
+)
+
+summary(cons_lm1)
+```
+
+## 6.1 Uji Autokorelasi Durbin-Watson
+
+Hipotesis nol menyatakan tidak terdapat autokorelasi. Keputusan menggunakan taraf nyata 5%.
+
+```{r dw}
+dwtest(cons_lm1)
+```
+
+## 6.2 Uji Heteroskedastisitas Breusch-Pagan
+
+Hipotesis nol menyatakan ragam sisaan homogen.
+
+```{r bp}
+bptest(cons_lm1)
+```
+
+## 6.3 Uji Normalitas Shapiro-Wilk
+
+Hipotesis nol menyatakan sisaan berdistribusi normal.
+
+```{r shapiro}
+shapiro.test(residuals(cons_lm1))
+```
+
+# 7. Perbandingan Kinerja Model
+
+```{r comparison}
+akurasi <- data.frame(
+  Model = c("Koyck", "DLM Optimum", "ARDL Optimum"),
+  MAPE = c(mape.koyck, mape.dlm, mape.ardl),
+  Deviance = c(deviance.koyck, deviance.dlm, deviance.ardl)
+)
+
+akurasi$MAPE_persen <- akurasi$MAPE * 100
+akurasi
+
+model.terbaik.mape <- akurasi$Model[which.min(akurasi$MAPE)]
+model.terbaik.deviance <- akurasi$Model[which.min(akurasi$Deviance)]
+
+cat("Model terbaik berdasarkan MAPE:", model.terbaik.mape, "\n")
+cat("Model terbaik berdasarkan deviance:", model.terbaik.deviance, "\n")
+```
+
+# 8. Visualisasi Aktual vs Peramalan
+
+```{r plot-forecast}
+plot(
+  test$AQI,
+  type = "b",
+  pch = 1,
+  lwd = 2,
+  xlab = "Periode",
+  ylab = "AQI",
+  main = "Perbandingan Aktual dan Hasil Peramalan"
+)
+
+lines(fore.koyck$forecasts, type = "b", pch = 16)
+lines(fore.dlm$forecasts, type = "b", pch = 17)
+lines(fore.ardl$forecasts, type = "b", pch = 18)
+
+legend(
+  "topleft",
+  legend = c("Aktual", "Koyck", "DLM Optimum", "ARDL Optimum"),
+  lty = 1,
+  pch = c(1, 16, 17, 18),
+  cex = 0.8
+)
+```
+
+# 10. Kesimpulan
+
+Berdasarkan data yang digunakan, tiga pendekatan regresi dengan peubah lag telah diterapkan. Hasil pencarian menunjukkan DLM optimum pada **q = 10**, sedangkan ARDL optimum pada **p = 14** untuk PM2.5 dan **q = 15** untuk AQI berdasarkan AIC.
+
+Perbandingan akurasi menunjukkan bahwa **Koyck menghasilkan MAPE terkecil**, sehingga menjadi model dengan kinerja peramalan terbaik berdasarkan MAPE. Sementara itu, **ARDL optimum menghasilkan deviance terkecil**, sehingga memiliki kecocokan residual paling kecil pada data training di antara tiga model.
+
+Pada uji asumsi `AQI ~ pm25 + L(pm25)`, nilai Durbin-Watson menunjukkan adanya indikasi autokorelasi positif dan uji Breusch-Pagan menunjukkan adanya heteroskedastisitas pada taraf 5%, sedangkan uji Shapiro-Wilk tidak menolak normalitas sisaan pada taraf 5%.
