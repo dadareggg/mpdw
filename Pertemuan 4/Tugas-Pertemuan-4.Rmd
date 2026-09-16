@@ -1,0 +1,439 @@
+---
+title: "Pembangkitan MA, AR, dan ARMA"
+author: "Darell Belva M0401241071"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+```{r}
+library(TSA)
+
+set.seed(1234)
+
+n <- 300
+```
+
+```{r}
+
+# MA(2) MANUAL
+
+set.seed(1234)
+
+theta1 <- 0.4
+theta2 <- 0.6
+
+wn_ma2 <- rnorm(n)
+
+ma2_manual <- numeric(n)
+
+# Nilai awal
+ma2_manual[1] <- wn_ma2[1]
+ma2_manual[2] <- wn_ma2[2] + theta1 * wn_ma2[1]
+
+# Pembangkitan selanjutnya
+for(i in 3:n){
+  ma2_manual[i] <- wn_ma2[i] +
+    theta1 * wn_ma2[i-1] +
+    theta2 * wn_ma2[i-2]
+}
+
+ma2_manual
+```
+```{r}
+arima.sim(list(order=c(0,0,1), ma=0.5), n=200)
+```
+
+```{r}
+
+# MA(2) ARIMA.SIM
+
+set.seed(1234)
+
+ma2_arima <- arima.sim(
+  list(order = c(0,0,2),
+       ma = c(0.4, 0.6)),
+  n = n
+)
+
+ma2_arima
+```
+
+
+```{r}
+
+# PLOT MA(2)
+
+ts.plot(ma2_arima,
+        main = "Time Series MA(2)",
+        ylab = "Yt",
+        xlab = "Time")
+
+acf(ma2_arima,
+    lag.max = 20,
+    main = "ACF MA(2)")
+
+pacf(ma2_arima,
+     lag.max = 20,
+     main = "PACF MA(2)")
+
+TSA::eacf(ma2_arima)
+```
+
+
+```{r}
+# Yt
+yt_ma2 <- ma2_arima[-1]
+
+# Yt-1
+yt_1_ma2 <- ma2_arima[-n]
+
+plot(y = yt_ma2,
+     x = yt_1_ma2,
+     main = "MA(2): Yt vs Yt-1",
+     xlab = "Yt-1",
+     ylab = "Yt")
+```
+
+```{r}
+# Yt
+yt_ma2_lag2 <- ma2_arima[-c(1,2)]
+
+# Yt-2
+yt_2_ma2 <- ma2_arima[-c(n-1,n)]
+
+plot(y = yt_ma2_lag2,
+     x = yt_2_ma2,
+     main = "MA(2): Yt vs Yt-2",
+     xlab = "Yt-2",
+     ylab = "Yt")
+```
+
+
+```{r}
+# Yt
+yt_ma2_lag3 <- ma2_arima[-c(1,2,3)]
+
+# Yt-3
+yt_3_ma2 <- ma2_arima[-c(n-2,n-1,n)]
+
+plot(y = yt_ma2_lag3,
+     x = yt_3_ma2,
+     main = "MA(2): Yt vs Yt-3",
+     xlab = "Yt-3",
+     ylab = "Yt")
+```
+
+
+```{r}
+
+# AUTOKORELASI MA(2)
+
+
+acf_ma2 <- acf(ma2_arima,
+               lag.max = 3,
+               plot = FALSE)$acf
+
+rho1_ma2 <- acf_ma2[2]
+rho2_ma2 <- acf_ma2[3]
+rho3_ma2 <- acf_ma2[4]
+
+# Teoritis
+rho1_ma2_teori <- (theta1 + theta1*theta2) /
+  (1 + theta1^2 + theta2^2)
+
+rho2_ma2_teori <- theta2 /
+  (1 + theta1^2 + theta2^2)
+
+rho3_ma2_teori <- 0
+
+hasil_ma2 <- data.frame(
+  Lag = 1:3,
+  Simulasi = c(rho1_ma2, rho2_ma2, rho3_ma2),
+  Teoritis = c(rho1_ma2_teori,
+               rho2_ma2_teori,
+               rho3_ma2_teori)
+)
+
+hasil_ma2
+```
+
+
+```{r}
+
+# AR(2) MANUAL
+
+set.seed(1234)
+
+phi1 <- 0.5
+phi2 <- 0.2
+
+wn_ar2 <- rnorm(n)
+
+ar2_manual <- numeric(n)
+
+# Nilai awal
+ar2_manual[1] <- wn_ar2[1]
+ar2_manual[2] <- phi1 * ar2_manual[1] + wn_ar2[2]
+
+# Pembangkitan selanjutnya
+for(i in 3:n){
+  ar2_manual[i] <- phi1 * ar2_manual[i-1] +
+    phi2 * ar2_manual[i-2] +
+    wn_ar2[i]
+}
+
+ar2_manual
+```
+
+
+```{r}
+
+# AR(2) ARIMA.SIM
+
+set.seed(1234)
+
+ar2_arima <- arima.sim(
+  list(order = c(2,0,0),
+       ar = c(0.5, 0.2)),
+  n = n
+)
+
+ar2_arima
+```
+
+
+```{r}
+
+# PLOT AR(2)
+
+ts.plot(ar2_arima,
+        main = "Time Series AR(2)",
+        ylab = "Yt",
+        xlab = "Time")
+
+acf(ar2_arima,
+    lag.max = 20,
+    main = "ACF AR(2)")
+
+pacf(ar2_arima,
+     lag.max = 20,
+     main = "PACF AR(2)")
+
+TSA::eacf(ar2_arima)
+```
+
+
+```{r}
+# Yt vs Yt-1
+yt_ar2 <- ar2_arima[-1]
+yt_1_ar2 <- ar2_arima[-n]
+
+plot(y = yt_ar2,
+     x = yt_1_ar2,
+     main = "AR(2): Yt vs Yt-1",
+     xlab = "Yt-1",
+     ylab = "Yt")
+
+# Yt vs Yt-2
+yt_ar2_lag2 <- ar2_arima[-c(1,2)]
+yt_2_ar2 <- ar2_arima[-c(n-1,n)]
+
+plot(y = yt_ar2_lag2,
+     x = yt_2_ar2,
+     main = "AR(2): Yt vs Yt-2",
+     xlab = "Yt-2",
+     ylab = "Yt")
+
+# Yt vs Yt-3
+yt_ar2_lag3 <- ar2_arima[-c(1,2,3)]
+yt_3_ar2 <- ar2_arima[-c(n-2,n-1,n)]
+
+plot(y = yt_ar2_lag3,
+     x = yt_3_ar2,
+     main = "AR(2): Yt vs Yt-3",
+     xlab = "Yt-3",
+     ylab = "Yt")
+```
+
+```{r}
+
+# AUTOKORELASI AR(2)
+
+acf_ar2 <- acf(ar2_arima,
+               lag.max = 3,
+               plot = FALSE)$acf
+
+rho1_ar2 <- acf_ar2[2]
+rho2_ar2 <- acf_ar2[3]
+rho3_ar2 <- acf_ar2[4]
+
+# Teori
+rho1_ar2_teori <- phi1 / (1 - phi2)
+rho2_ar2_teori <- phi1 * rho1_ar2_teori + phi2
+rho3_ar2_teori <- phi1 * rho2_ar2_teori +
+  phi2 * rho1_ar2_teori
+
+hasil_ar2 <- data.frame(
+  Lag = 1:3,
+  Simulasi = c(rho1_ar2, rho2_ar2, rho3_ar2),
+  Teoritis = c(rho1_ar2_teori,
+               rho2_ar2_teori,
+               rho3_ar2_teori)
+)
+
+hasil_ar2
+```
+
+
+```{r}
+
+# ARMA(2,2) MANUAL
+
+arma.sim <- function(n, macoef, arcoef){
+
+  manum <- length(macoef)
+  arnum <- length(arcoef)
+
+  stopifnot(manum < n & arnum < n)
+
+  wn <- rnorm(n)
+
+  init <- max(manum, arnum)
+
+  arma <- wn[1:init]
+
+  for(i in (init+1):n){
+
+    mastart <- i - manum
+    maend   <- i - 1
+
+    arstart <- i - arnum
+    arend   <- i - 1
+
+    arma[i] <-
+      sum(arcoef * arma[arstart:arend]) +
+      sum(macoef * wn[mastart:maend]) +
+      wn[i]
+  }
+
+  return(arma)
+}
+
+set.seed(1234)
+
+arma22_manual <- arma.sim(
+  n = n,
+  macoef = c(0.4, 0.6),
+  arcoef = c(0.5, 0.2)
+)
+
+arma22_manual
+```
+
+```{r}
+
+# ARMA(2,2) ARIMA.SIM
+
+set.seed(1234)
+
+arma22_arima <- arima.sim(
+  list(
+    order = c(2,0,2),
+    ar = c(0.5, 0.2),
+    ma = c(0.4, 0.6)
+  ),
+  n = n
+)
+
+arma22_arima
+```
+
+
+```{r}
+
+# PLOT ARMA(2,2)
+
+ts.plot(arma22_arima,
+        main = "Time Series ARMA(2,2)",
+        ylab = "Yt",
+        xlab = "Time")
+
+acf(arma22_arima,
+    lag.max = 20,
+    main = "ACF ARMA(2,2)")
+
+pacf(arma22_arima,
+     lag.max = 20,
+     main = "PACF ARMA(2,2)")
+
+TSA::eacf(arma22_arima)
+```
+
+
+```{r}
+# Yt vs Yt-1
+yt_arma22 <- arma22_arima[-1]
+yt_1_arma22 <- arma22_arima[-n]
+
+plot(y = yt_arma22,
+     x = yt_1_arma22,
+     main = "ARMA(2,2): Yt vs Yt-1",
+     xlab = "Yt-1",
+     ylab = "Yt")
+
+# Yt vs Yt-2
+yt_arma22_lag2 <- arma22_arima[-c(1,2)]
+yt_2_arma22 <- arma22_arima[-c(n-1,n)]
+
+plot(y = yt_arma22_lag2,
+     x = yt_2_arma22,
+     main = "ARMA(2,2): Yt vs Yt-2",
+     xlab = "Yt-2",
+     ylab = "Yt")
+
+# Yt vs Yt-3
+yt_arma22_lag3 <- arma22_arima[-c(1,2,3)]
+yt_3_arma22 <- arma22_arima[-c(n-2,n-1,n)]
+
+plot(y = yt_arma22_lag3,
+     x = yt_3_arma22,
+     main = "ARMA(2,2): Yt vs Yt-3",
+     xlab = "Yt-3",
+     ylab = "Yt")
+```
+
+
+```{r}
+
+# AUTOKORELASI ARMA(2,2)
+
+acf_arma22 <- acf(arma22_arima,
+                  lag.max = 3,
+                  plot = FALSE)$acf
+
+rho1_arma22 <- acf_arma22[2]
+rho2_arma22 <- acf_arma22[3]
+rho3_arma22 <- acf_arma22[4]
+
+# Autokorelasi teoritis
+arma22_teori <- ARMAacf(
+  ar = c(0.5, 0.2),
+  ma = c(0.4, 0.6),
+  lag.max = 3
+)
+
+hasil_arma22 <- data.frame(
+  Lag = 1:3,
+  Simulasi = c(rho1_arma22,
+               rho2_arma22,
+               rho3_arma22),
+  Teoritis = arma22_teori[2:4]
+)
+
+hasil_arma22
+```
+
