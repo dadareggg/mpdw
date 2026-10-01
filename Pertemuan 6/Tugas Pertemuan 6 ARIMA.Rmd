@@ -1,0 +1,474 @@
+---
+title: "Tugas Pertemuan 6 ARIMA"
+author: "Darell Belva (M0401241071)"
+date: "1 Oktober 2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: show
+    self_contained: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 4.5, fig.align = "center")
+```
+
+
+# Packages
+
+```{r packages}
+library(ggplot2)
+library(tseries)
+library(MASS)
+library(forecast)
+library(TSA)
+library(TTR)
+library(aTSA)
+library(lmtest)
+library(car)
+library(readxl)
+library(graphics)
+```
+
+```{r helper, echo=FALSE}
+# Fungsi bantu untuk narasi otomatis agar teks selalu sesuai output
+kep <- function(p, alpha = 0.05) ifelse(p < alpha, "tolak $H_0$", "gagal tolak $H_0$")
+fp  <- function(p) ifelse(p < 0.0001, "< 0.0001", format(round(p, 4), nsmall = 4))
+# Ringkasan signifikansi parameter (menangani galat baku NaN)
+ringkas.p <- function(m) {
+  p <- coeftest(m)[, 4]
+  if (any(is.na(p))) return("Galat baku NaN")
+  ifelse(all(p < 0.05), "Semua", paste0(sum(p < 0.05), " dari ", length(p)))
+}
+```
+
+# Data
+
+## Impor dan Penyiapan Data
+
+Data asli berisi 1.450 hari kerja (2 Januari 2020 sampai 31 Desember 2025) dan tersusun dari tanggal **terbaru ke terlama**. Agar sesuai dengan urutan waktu, data diurutkan dari tanggal terlama, lalu **seluruh 1.450 amatan digunakan**.
+
+```{r data}
+raw <- read_excel("C:/Users/LENOVO IDEAPAD SLIM3/Downloads/Informasi Kurs Jisdor.xlsx", skip = 4)
+raw$Tgl <- as.Date(substr(raw$Tanggal, 1, 10), format = "%m/%d/%Y")
+raw <- raw[order(raw$Tgl), ]          # urutkan dari terlama ke terbaru
+datakurs <- raw[, c("Tgl", "Kurs")]
+N <- nrow(datakurs)
+datakurs.ts <- ts(datakurs$Kurs)
+
+c(Jumlah_Amatan = nrow(datakurs),
+  Awal = format(min(datakurs$Tgl)),
+  Akhir = format(max(datakurs$Tgl)))
+head(datakurs)
+```
+
+# Eksplorasi Data
+
+## Plot Data Penuh
+
+```{r plot-full}
+plot.ts(datakurs.ts, lty = 1, xlab = "Waktu (hari kerja ke-)", ylab = "Kurs (Rp/USD)",
+        main = "Plot Data Kurs JISDOR (1.450 Amatan)", col = "navyblue")
+```
+
+Plot menunjukkan lonjakan tajam kurs pada awal 2020 (puncak 16.741 pada 2 April 2020, bertepatan dengan guncangan pasar awal pandemi), lalu turun dan bergerak relatif tenang di kisaran 13.900 sampai 14.600 pada 2021. Sejak 2022 kurs naik bertahap hingga mencapai sekitar 16.900 pada 2025. Artinya data **tidak bergerak di sekitar nilai tengah yang tetap** (ada tren naik jangka panjang) dan ragamnya **berubah menurut waktu** (besar saat lonjakan 2020, lebih kecil pada periode setelahnya).
+
+## Pembagian Data Latih dan Data Uji
+
+Pembagian mengikuti tahun kalender: **data latih = 2020 sampai 2024 (1.213 amatan)** dan **data uji = tahun 2025 (237 amatan)**, atau sekitar 84:16. 
+
+```{r split}
+n.train <- sum(datakurs$Tgl < as.Date("2025-01-01"))
+kurstrain <- datakurs$Kurs[1:n.train]
+kurstest  <- datakurs$Kurs[(n.train + 1):N]
+train.ts <- ts(kurstrain)
+test.ts  <- ts(kurstest, start = n.train + 1)
+
+c(Latih = length(kurstrain), Uji = length(kurstest))
+range(datakurs$Tgl[1:n.train]); range(datakurs$Tgl[(n.train + 1):N])
+```
+
+```{r plot-split}
+plot.ts(datakurs.ts, xlab = "Waktu", ylab = "Kurs", main = "Pembagian Data Latih dan Data Uji",
+        col = "grey40")
+lines(train.ts, col = "navyblue", lwd = 1.5)
+lines(test.ts, col = "darkorange", lwd = 1.5)
+abline(v = n.train + 0.5, lty = 2)
+legend("topright", legend = c("Data Latih", "Data Uji"),
+       col = c("navyblue", "darkorange"), lty = 1, bty = "n")
+```
+
+# Uji Stasioneritas Data Latih
+
+## Stasioneritas dalam Rataan
+
+### Plot Data Latih
+
+```{r plot-train}
+plot.ts(train.ts, lty = 1, xlab = "Waktu", ylab = "Kurs", main = "Plot Kurs Data Latih",
+        col = "navyblue")
+```
+
+Data latih tidak bergerak di sekitar nilai tengah tertentu, sehingga secara eksplorasi **tidak stasioner dalam rataan**.
+
+### Plot ACF
+
+```{r acf-train}
+acf(train.ts, main = "ACF Data Latih", lag.max = 30)
+```
+
+Plot ACF turun sangat lambat dan seluruh lag berada di luar batas signifikansi. Ini juga mengindikasikan data **tidak stasioner dalam rataan**.
+
+### Uji ADF
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+```{r adf-train}
+adf.train <- tseries::adf.test(train.ts)
+adf.train
+```
+
+Berdasarkan uji ADF, didapat *p-value* sebesar `r fp(adf.train$p.value)` yang `r ifelse(adf.train$p.value < 0.05, "lebih kecil", "lebih besar")` dari taraf nyata 5% sehingga `r kep(adf.train$p.value)`. `r ifelse(adf.train$p.value < 0.05, "Secara formal uji ADF menyatakan data latih stasioner, yang **berbeda** dengan kesimpulan plot dan ACF. Perbedaan ini wajar karena fungsi adf.test() pada paket tseries memasukkan komponen konstanta dan **tren linear** dalam regresi pengujiannya, sehingga yang diuji adalah kestasioneran di sekitar tren, sedangkan data latih ini memiliki lonjakan, penurunan, lalu tren naik yang tidak linear. Karena plot dan ACF dengan jelas menunjukkan data tidak stasioner dalam rataan (ACF turun sangat lambat), keputusan diambil berdasarkan ketiganya: data diperlakukan **tidak stasioner dalam rataan** dan ditangani dengan differencing.", "Data latih **tidak stasioner** dalam rataan, sesuai dengan plot deret waktu dan plot ACF.")`
+
+## Stasioneritas dalam Ragam (Box-Cox)
+
+Data dinyatakan stasioner dalam ragam apabila selang kepercayaan 95% bagi $\lambda$ **memuat angka 1**.
+
+```{r boxcox-1}
+fungsi.bc <- function(x, grid = seq(-6, 4, by = 0.05), plot = TRUE) {
+  bc <- boxcox(x ~ seq_along(x), lambda = grid, plotit = plot)
+  ci <- bc$x[bc$y > max(bc$y) - 0.5 * qchisq(0.95, df = 1)]
+  c(Lambda_Optimum = bc$x[which.max(bc$y)], Batas_Bawah = min(ci), Batas_Atas = max(ci))
+}
+
+index <- seq_along(train.ts)
+bc1 <- fungsi.bc(as.numeric(train.ts))
+bc1
+```
+
+Nilai $\lambda$ optimum sebesar `r round(bc1["Lambda_Optimum"], 2)` dengan selang kepercayaan 95% dari `r round(bc1["Batas_Bawah"], 2)` sampai `r round(bc1["Batas_Atas"], 2)`. Selang tersebut `r ifelse(bc1["Batas_Bawah"] <= 1 & bc1["Batas_Atas"] >= 1, "memuat", "**tidak memuat**")` angka 1, sehingga data latih `r ifelse(bc1["Batas_Bawah"] <= 1 & bc1["Batas_Atas"] >= 1, "stasioner", "**tidak stasioner**")` dalam ragam.
+
+# Penanganan Ketidakstasioneran
+
+## Transformasi (Ragam)
+
+Karena stasioneritas ragam tidak terpenuhi, dilakukan transformasi. Dipilih **transformasi logaritma natural** ($\lambda = 0$) karena: (1) nilai $\lambda$ optimum Box-Cox (sekitar $-3$) terlalu ekstrem dan sulit ditafsirkan bila dipakai langsung, (2) simpangan kurs bersifat proporsional terhadap levelnya, dan (3) log mudah ditafsirkan dan mudah dikembalikan ke skala semula saat peramalan.
+
+```{r log}
+train.log <- log(train.ts)
+plot.ts(train.log, xlab = "Waktu", ylab = "log(Kurs)", main = "Plot Data Latih Setelah Transformasi Log",
+        col = "navyblue")
+```
+
+## Differencing (Rataan)
+
+Karena data tidak stasioner dalam rataan, dilakukan **differencing orde 1** pada data hasil transformasi.
+
+```{r diff}
+train.diff <- diff(train.log, differences = 1)
+plot.ts(train.diff, xlab = "Waktu", ylab = "Selisih log(Kurs)",
+        main = "Plot Differencing Pertama Data Latih (Log)", col = "navyblue")
+abline(h = 0, lty = 2)
+```
+
+Setelah differencing, data bergerak di sekitar nol tanpa tren yang jelas, sehingga secara eksplorasi sudah stasioner dalam rataan.
+
+### Plot ACF
+
+```{r acf-diff}
+acf(train.diff, main = "ACF Data Hasil Differencing", lag.max = 30)
+```
+
+Plot ACF tidak lagi turun lambat; autokorelasi menghilang cepat, menandakan ketidakstasioneran dalam rataan sudah tertangani.
+
+### Uji ADF
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+```{r adf-diff}
+adf.diff <- tseries::adf.test(train.diff)
+adf.diff
+```
+
+Berdasarkan uji ADF, didapat *p-value* `r fp(adf.diff$p.value)` (`r ifelse(adf.diff$p.value < 0.05, "lebih kecil", "lebih besar")` dari 5%) sehingga `r kep(adf.diff$p.value)`. Data hasil differencing `r ifelse(adf.diff$p.value < 0.05, "**stasioner dalam rataan**", "belum stasioner dalam rataan")`, sehingga dapat dilanjutkan ke pemodelan dengan $d = 1$.
+
+### Box-Cox Setelah Transformasi dan Differencing
+
+```{r boxcox-2}
+shift <- ifelse(min(train.diff) <= 0, abs(min(train.diff)) + 1, 0)
+bc2 <- fungsi.bc(as.numeric(train.diff + shift), grid = seq(-6, 6, by = 0.05))
+bc2
+```
+
+Pada hasil ini $\lambda$ optimum sebesar `r round(bc2["Lambda_Optimum"], 2)``r ifelse(bc2["Lambda_Optimum"] <= -5.95 | bc2["Lambda_Optimum"] >= 5.95, " (berada di batas grid pencarian)", "")` dan selang kepercayaan 95% $\lambda$ adalah `r round(bc2["Batas_Bawah"], 2)` sampai `r round(bc2["Batas_Atas"], 2)`, yang `r ifelse(bc2["Batas_Bawah"] <= 1 & bc2["Batas_Atas"] >= 1, "memuat", "**tidak memuat**")` angka 1. `r ifelse(bc2["Batas_Bawah"] <= 1 & bc2["Batas_Atas"] >= 1, "Ragam sudah stasioner.", "Artinya masih ada ketidakhomogenan ragam (periode lonjakan di awal data memiliki simpangan jauh lebih besar). Kondisi ini dicatat sebagai keterbatasan model ARIMA dan dibahas lagi pada analisis sisaan.")`
+
+# Identifikasi Model Tentatif
+
+## Plot ACF dan PACF
+
+```{r acf-pacf}
+par(mfrow = c(1, 2))
+acf(train.diff, main = "ACF", lag.max = 20)
+pacf(train.diff, main = "PACF", lag.max = 20)
+par(mfrow = c(1, 1))
+```
+
+Pada plot PACF, lag 1 menonjol jelas (sekitar 0,20) dan lag-lag berikutnya relatif kecil, sehingga PACF dapat dianggap *cuts off* setelah lag 1 dan model tentatifnya ARIMA(1,1,0). Pada plot ACF, lag 1 berada di dalam batas dan hanya beberapa lag yang jauh (3, 4, 6, 8) sedikit melewati batas; jika ACF dianggap *cuts off* maka model tentatifnya ARIMA(0,1,1), dan jika keduanya dianggap *tails off* maka ARIMA(1,1,1).
+
+## Plot EACF
+
+```{r eacf}
+eacf(train.diff, ar.max = 6, ma.max = 8)
+```
+
+Segitiga nol pada EACF tidak terbentuk sepenuhnya bersih, sehingga EACF dipakai sebagai pelengkap. Dari ujung area nol di sekitar AR 1 sampai 2 dan MA 2, model tentatif tambahan adalah ARIMA(0,1,2), ARIMA(1,1,2), ARIMA(2,1,0) dan ARIMA(2,1,2).
+
+Model tentatif yang dikaji: **ARIMA(0,1,1), ARIMA(1,1,0), ARIMA(1,1,1), ARIMA(0,1,2), ARIMA(2,1,0), ARIMA(1,1,2), ARIMA(2,1,2)**.
+
+# Pendugaan Parameter
+
+Pendugaan memakai fungsi `Arima()` pada data latih yang sudah di-log (orde $d = 1$ ditulis langsung pada `order`). Signifikansi parameter diuji dengan `coeftest()` ($H_0$: parameter sama dengan nol), dan dibandingkan nilai AIC serta BIC.
+
+```{r fit}
+orde <- list(c(0,1,1), c(1,1,0), c(1,1,1), c(0,1,2), c(2,1,0), c(1,1,2), c(2,1,2))
+nama <- sapply(orde, function(o) sprintf("ARIMA(%d,%d,%d)", o[1], o[2], o[3]))
+model.tentatif <- lapply(orde, function(o) Arima(train.log, order = o, method = "ML"))
+names(model.tentatif) <- nama
+
+for (i in seq_along(model.tentatif)) {
+  cat("\n=====", nama[i], "=====\n")
+  print(coeftest(model.tentatif[[i]]))
+}
+```
+
+```{r tabel-aic}
+tab.model <- data.frame(
+  Model = nama,
+  AIC = sapply(model.tentatif, AIC),
+  BIC = sapply(model.tentatif, BIC),
+  Param_Signifikan = sapply(model.tentatif, ringkas.p),
+  row.names = NULL
+)
+tab.model <- tab.model[order(tab.model$AIC), ]
+tab.model
+```
+
+```{r pilih, echo=FALSE}
+ok <- tab.model[tab.model$Param_Signifikan %in% "Semua", ]
+terbaik <- ok$Model[1]
+orde.terbaik <- orde[[which(nama == terbaik)]]
+aic.min.all <- tab.model$Model[1]
+```
+
+`r if (any(tab.model$Param_Signifikan == "Galat baku NaN")) paste0("Catatan: galat baku parameter ", paste(tab.model$Model[tab.model$Param_Signifikan == "Galat baku NaN"], collapse = ", "), " tidak dapat dihitung (NaN), sehingga signifikansinya tidak dapat diuji dan model ini tidak dipertimbangkan. ")`Model dengan AIC terkecil secara keseluruhan adalah **`r aic.min.all`**. Namun model yang dipilih harus memperhatikan juga signifikansi parameter. Di antara model yang **seluruh parameternya signifikan**, AIC terkecil dimiliki **`r terbaik`** (AIC = `r round(ok$AIC[1], 2)`). Oleh karena itu model yang dipilih untuk dianalisis lebih lanjut adalah **`r terbaik`**.
+
+```{r model-terbaik}
+model.best <- Arima(train.log, order = orde.terbaik, method = "ML")
+summary(model.best)
+```
+
+# Analisis Sisaan
+
+Asumsi sisaan model ARIMA: menyebar normal, saling bebas, ragam homogen, dan nilai tengah nol.
+
+## Eksplorasi Sisaan
+
+```{r eksplorasi-sisaan, fig.height=7}
+sisaan <- as.numeric(residuals(model.best))
+par(mfrow = c(2, 2))
+qqPlot(sisaan, main = "Normal Q-Q Plot", ylab = "Sisaan")
+plot(sisaan, type = "p", main = "Sisaan vs Waktu", xlab = "Waktu", ylab = "Sisaan")
+abline(h = 0, col = "red", lty = 2)
+acf(sisaan, main = "ACF Sisaan", lag.max = 20)
+pacf(sisaan, main = "PACF Sisaan", lag.max = 20)
+par(mfrow = c(1, 1))
+```
+
+Plot Q-Q memperlihatkan titik-titik yang menyimpang dari garis lurus pada kedua ujung (ekor lebih berat dari normal), sedangkan plot sisaan terhadap waktu menunjukkan lebar pita yang tidak seragam: simpangan besar pada periode awal (sekitar amatan ke-50 sampai ke-75, Maret sampai April 2020), lalu jauh lebih kecil setelahnya. ACF sisaan melewati batas pada lag 4, 6, 8, dan 19, sedangkan PACF sisaan pada lag 5, 7, 9, dan 12, sehingga kebebasan sisaan perlu diuji secara formal berikut.
+
+## Uji Formal
+
+### Normalitas (Kolmogorov-Smirnov)
+
+$H_0$ : Sisaan menyebar normal
+
+$H_1$ : Sisaan tidak menyebar normal
+
+```{r ks}
+ks.res <- ks.test(sisaan, "pnorm", mean = mean(sisaan), sd = sd(sisaan))
+ks.res
+```
+
+*p-value* = `r fp(ks.res$p.value)` sehingga `r kep(ks.res$p.value)`: sisaan `r ifelse(ks.res$p.value < 0.05, "**tidak menyebar normal**", "menyebar normal")`.
+
+### Kebebasan Sisaan (Ljung-Box)
+
+$H_0$ : Sisaan saling bebas
+
+$H_1$ : Sisaan tidak saling bebas
+
+```{r lb}
+lb.res <- Box.test(sisaan, lag = 20, type = "Ljung-Box", fitdf = length(coef(model.best)))
+lb.res
+```
+
+*p-value* = `r fp(lb.res$p.value)` sehingga `r kep(lb.res$p.value)`: sisaan `r ifelse(lb.res$p.value < 0.05, "**tidak saling bebas**", "saling bebas (tidak ada autokorelasi)")`.
+
+### Kehomogenan Ragam (Ljung-Box pada Sisaan Kuadrat)
+
+$H_0$ : Ragam sisaan homogen
+
+$H_1$ : Ragam sisaan tidak homogen
+
+```{r homogen}
+hom.res <- Box.test(sisaan^2, lag = 20, type = "Ljung-Box")
+hom.res
+```
+
+*p-value* = `r fp(hom.res$p.value)` sehingga `r kep(hom.res$p.value)`: ragam sisaan `r ifelse(hom.res$p.value < 0.05, "**tidak homogen**", "homogen")`.
+
+### Nilai Tengah Sisaan (Uji-t)
+
+$H_0$ : Nilai tengah sisaan sama dengan 0
+
+$H_1$ : Nilai tengah sisaan tidak sama dengan 0
+
+```{r ttest}
+t.res <- t.test(sisaan, mu = 0, conf.level = 0.95)
+t.res
+```
+
+*p-value* = `r fp(t.res$p.value)` sehingga `r kep(t.res$p.value)`: nilai tengah sisaan `r ifelse(t.res$p.value < 0.05, "tidak sama dengan nol", "sama dengan nol")`.
+
+## Kesimpulan Analisis Sisaan
+
+```{r kesimpulan-sisaan, echo=FALSE}
+data.frame(
+  Asumsi = c("Normalitas (KS)", "Kebebasan (Ljung-Box)", "Homogenitas ragam (Ljung-Box sisaan kuadrat)", "Nilai tengah nol (uji-t)"),
+  P_value = c(fp(ks.res$p.value), fp(lb.res$p.value), fp(hom.res$p.value), fp(t.res$p.value)),
+  Terpenuhi = c(ks.res$p.value >= 0.05, lb.res$p.value >= 0.05, hom.res$p.value >= 0.05, t.res$p.value >= 0.05)
+)
+```
+
+# Overfitting
+
+Overfitting dilakukan dengan menaikkan orde AR ($p$) atau MA ($q$) sebanyak satu dari model terbaik, yaitu **`r terbaik`**.
+
+```{r overfit}
+p0 <- orde.terbaik[1]; d0 <- orde.terbaik[2]; q0 <- orde.terbaik[3]
+kandidat.of <- list(c(p0 + 1, d0, q0), c(p0, d0, q0 + 1))
+nama.of <- sapply(kandidat.of, function(o) sprintf("ARIMA(%d,%d,%d)", o[1], o[2], o[3]))
+model.of <- lapply(kandidat.of, function(o) Arima(train.log, order = o, method = "ML"))
+
+for (i in seq_along(model.of)) {
+  cat("\n=====", nama.of[i], "=====\n")
+  print(coeftest(model.of[[i]]))
+}
+
+tab.of <- data.frame(
+  Model = c(terbaik, nama.of),
+  AIC = c(AIC(model.best), sapply(model.of, AIC)),
+  BIC = c(BIC(model.best), sapply(model.of, BIC)),
+  Param_Signifikan = c("Semua",
+    sapply(model.of, ringkas.p))
+)
+tab.of
+```
+
+```{r of-kep, echo=FALSE}
+lebih.baik <- any(tab.of$AIC[-1] < tab.of$AIC[1] & tab.of$Param_Signifikan[-1] == "Semua")
+```
+
+Hasilnya, model hasil overfitting `r ifelse(lebih.baik, "ada yang memiliki AIC lebih kecil dengan seluruh parameter signifikan, sehingga model tersebut lebih baik", "tidak lebih baik dibanding model awal: tidak ada yang sekaligus memiliki AIC lebih kecil dan seluruh parameter signifikan")`. Oleh karena itu model yang digunakan untuk peramalan adalah **`r ifelse(lebih.baik, tab.of$Model[which(tab.of$AIC[-1] < tab.of$AIC[1] & tab.of$Param_Signifikan[-1] == "Semua")[1] + 1], terbaik)`**.
+
+```{r final-model, echo=FALSE}
+if (lebih.baik) {
+  idx.of <- which(tab.of$AIC[-1] < tab.of$AIC[1] & tab.of$Param_Signifikan[-1] == "Semua")[1]
+  model.final <- model.of[[idx.of]]
+} else {
+  model.final <- model.best
+}
+nama.final <- ifelse(lebih.baik, nama.of[idx.of], terbaik)
+```
+
+# Peramalan
+
+Peramalan dilakukan sepanjang data uji (237 hari kerja) dengan fungsi `forecast()`. Karena model dibangun pada data log, hasil ramalan dikembalikan ke skala kurs semula dengan fungsi eksponensial.
+
+```{r forecast}
+h <- length(kurstest)
+ramalan.log <- forecast::forecast(model.final, h = h, level = 95)
+
+hasil    <- exp(ramalan.log$mean)
+batas.bw <- exp(ramalan.log$lower[, 1])
+batas.ba <- exp(ramalan.log$upper[, 1])
+
+perbandingan <- data.frame(
+  Tanggal = datakurs$Tgl[(n.train + 1):N],
+  Aktual = kurstest,
+  Ramalan = round(as.numeric(hasil), 0),
+  Bawah_95 = round(as.numeric(batas.bw), 0),
+  Atas_95 = round(as.numeric(batas.ba), 0)
+)
+head(perbandingan, 10)
+```
+
+## Plot Ramalan Terhadap Data Uji
+
+```{r plot-forecast}
+plot(1:N, datakurs$Kurs, type = "l", col = "black", xlab = "Waktu", ylab = "Kurs (Rp/USD)",
+     main = paste("Peramalan Kurs dengan", nama.final))
+polygon(c((n.train + 1):N, rev((n.train + 1):N)),
+        c(as.numeric(batas.bw), rev(as.numeric(batas.ba))),
+        col = rgb(0.2, 0.4, 0.9, 0.2), border = NA)
+lines((n.train + 1):N, as.numeric(hasil), col = "blue", lty = 2, lwd = 2)
+abline(v = n.train + 0.5, lty = 3)
+legend("topright", legend = c("Data Aktual", "Ramalan", "Selang Prediksi 95%"),
+       col = c("black", "blue", rgb(0.2, 0.4, 0.9, 0.4)), lty = c(1, 2, 1), lwd = c(1, 2, 8), bty = "n")
+```
+
+Zoom pada periode uji:
+
+```{r plot-zoom}
+plot((n.train + 1):N, kurstest, type = "l", ylim = range(kurstest, batas.bw, batas.ba),
+     xlab = "Waktu", ylab = "Kurs (Rp/USD)", main = "Aktual vs Ramalan pada Data Uji")
+polygon(c((n.train + 1):N, rev((n.train + 1):N)),
+        c(as.numeric(batas.bw), rev(as.numeric(batas.ba))),
+        col = rgb(0.2, 0.4, 0.9, 0.2), border = NA)
+lines((n.train + 1):N, as.numeric(hasil), col = "blue", lty = 2, lwd = 2)
+```
+
+## Akurasi Ramalan
+
+```{r akurasi}
+akurasi <- accuracy(as.numeric(hasil), kurstest)
+akurasi
+```
+
+```{r bench, echo=FALSE}
+# pembanding sederhana: ramalan naif (nilai terakhir data latih)
+naif <- rep(tail(kurstrain, 1), h)
+akurasi.naif <- accuracy(naif, kurstest)
+cat("Pembanding (ramalan naif / random walk tanpa drift):\n")
+akurasi.naif
+```
+
+Pada data uji, model **`r nama.final`** menghasilkan MAPE sebesar `r round(akurasi[1, "MAPE"], 2)`% dan RMSE sebesar `r round(akurasi[1, "RMSE"], 1)`. Sebagai pembanding, ramalan naif menghasilkan MAPE `r round(akurasi.naif[1, "MAPE"], 2)`%. `r ifelse(akurasi[1, "MAPE"] < akurasi.naif[1, "MAPE"], "Model ARIMA sedikit lebih akurat daripada ramalan naif.", "Model ARIMA tidak lebih akurat daripada ramalan naif (selisihnya sangat kecil); ini wajar karena kurs mendekati *random walk* sehingga nilai terakhir sudah menjadi ramalan yang kuat.")` MAPE sekitar `r round(akurasi[1, "MAPE"], 1)`% tergolong kecil sebagai galat persentase, tetapi nilai ME yang positif (`r round(akurasi[1, "ME"], 0)`) menunjukkan ramalan **secara sistematis lebih rendah** daripada nilai aktual. Ramalan pada horizon panjang mendatar di sekitar nilai terakhir data latih, sedangkan kurs sepanjang 2025 terus naik, dan model `r nama.final` tanpa suku *drift* tidak menangkap tren naik tersebut. Selang prediksi 95% sangat lebar (`r format(round(min(batas.bw)), big.mark = ".", decimal.mark = ",")` sampai `r format(round(max(batas.ba)), big.mark = ".", decimal.mark = ",")`) dan memuat `r round(100 * mean(kurstest >= batas.bw & kurstest <= batas.ba))`% data uji, tetapi lebar ini juga mencerminkan ketidakpastian yang besar pada horizon 237 hari kerja.
+
+# Kesimpulan
+
+1. Data latih kurs JISDOR (1.213 amatan, 2020 sampai 2024) **tidak stasioner dalam rataan** berdasarkan plot dan ACF (uji ADF `r ifelse(adf.train$p.value < 0.05, "dengan komponen tren menyatakan sebaliknya, lihat pembahasan di atas", "juga menolak kestasioneran")`) dan **tidak stasioner dalam ragam** (selang Box-Cox tidak memuat 1).
+2. Ketidakstasioneran ditangani dengan **transformasi log** dan **differencing orde 1**.
+3. Dari model tentatif (ACF, PACF, EACF), model terpilih berdasarkan AIC terkecil dengan seluruh parameter signifikan adalah **`r terbaik`**.
+4. Analisis sisaan: hanya nilai tengah sisaan nol yang terpenuhi; normalitas, kebebasan, dan homogenitas ragam tidak terpenuhi akibat pengelompokan volatilitas, sehingga ini menjadi keterbatasan model ARIMA pada data ini.
+5. Overfitting `r ifelse(lebih.baik, "menghasilkan model yang lebih baik", "tidak menghasilkan model yang lebih baik")`, sehingga model akhir untuk peramalan adalah **`r nama.final`**.
+6. Hasil peramalan 237 hari kerja memberikan MAPE `r round(akurasi[1, "MAPE"], 2)`% pada data uji.
